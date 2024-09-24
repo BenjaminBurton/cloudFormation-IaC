@@ -1,0 +1,216 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: AWS Infrastructure with VPC, Public Subnets, Auto Scaling Group, and Application Load Balancer.
+
+Resources:
+  # Create the VPC
+  MyLevelUpVPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      CidrBlock: 10.10.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: MyLevelUpVPC
+
+  # Create Public Subnet 1
+  PublicSubnet1-us-east-1:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref MyLevelUpVPC
+      CidrBlock: 10.10.1.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [0, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: PublicSubnet1-us-east-1
+
+  # Create Public Subnet 2
+  PublicSubnet2-us-east-2:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref MyLevelUpVPC
+      CidrBlock: 10.10.2.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [1, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: PublicSubnet2-us-east-2
+
+  # Create Public Subnet 3
+  PublicSubnet3-us-east-2:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      VpcId: !Ref MyLevelUpVPC
+      CidrBlock: 10.10.3.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Select [2, !GetAZs ""]
+      Tags:
+        - Key: Name
+          Value: PublicSubnet3-us-east-2
+
+  # Create Internet Gateway
+  InternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+    Properties:
+      Tags:
+        - Key: Name
+          Value: InternetGateway
+
+  # Attach Internet Gateway to the VPC
+  AttachGateway:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      VpcId: !Ref MyLevelUpVPC
+      InternetGatewayId: !Ref InternetGateway
+
+  # Create a Route Table for Public Subnets
+  PublicRouteTable:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      VpcId: !Ref MyLevelUpVPC
+      Tags:
+        - Key: Name
+          Value: PublicRouteTable
+
+  # Create a Route to the Internet
+  PublicRoute:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  # Associate Public Subnets with the Route Table
+  PublicSubnet1-us-east-1RouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PublicSubnet1-us-east-1
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet2-us-east-2RouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PublicSubnet2-us-east-2
+      RouteTableId: !Ref PublicRouteTable
+
+  PublicSubnet3-us-east-2RouteTableAssociation:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      SubnetId: !Ref PublicSubnet3-us-east-2
+      RouteTableId: !Ref PublicRouteTable
+
+  # Create Security Group for Load Balancer
+  LoadBalancerSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Allow HTTP traffic from anywhere
+      VpcId: !Ref MyLevelUpVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+
+  # Create Security Group for Web Servers
+  WebServerSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Allow HTTP traffic only from the ALB
+      VpcId: !Ref MyLevelUpVPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          SourceSecurityGroupId: !Ref LoadBalancerSecurityGroup
+
+  # Create Application Load Balancer
+  ApplicationLoadBalancer:
+    Type: 'AWS::ElasticLoadBalancingV2::LoadBalancer'
+    Properties:
+      Name: MyApplicationLoadBalancer
+      Subnets:
+        - !Ref PublicSubnet1-us-east-1
+        - !Ref PublicSubnet2-us-east-2
+        - !Ref PublicSubnet3-us-east-2
+      SecurityGroups:
+        - !Ref LoadBalancerSecurityGroup
+      Scheme: internet-facing
+      LoadBalancerAttributes:
+        - Key: idle_timeout.timeout_seconds
+          Value: '60'
+
+  # Create Target Group for the Auto Scaling Group
+  TargetGroup:
+    Type: 'AWS::ElasticLoadBalancingV2::TargetGroup'
+    Properties:
+      Name: MyTargetGroup
+      VpcId: !Ref MyLevelUpVPC
+      Port: 80
+      Protocol: HTTP
+      TargetType: instance
+      HealthCheckProtocol: HTTP
+      HealthCheckPort: '80'
+      HealthCheckPath: /
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 5
+      UnhealthyThresholdCount: 2
+
+  # Create Listener for the Load Balancer
+  LoadBalancerListener:
+    Type: 'AWS::ElasticLoadBalancingV2::Listener'
+    Properties:
+      LoadBalancerArn: !Ref ApplicationLoadBalancer
+      Port: 80
+      Protocol: HTTP
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+
+  # Create Launch Configuration for Auto Scaling Group
+  LaunchConfiguration:
+    Type: 'AWS::AutoScaling::LaunchConfiguration'
+    Properties:
+      ImageId: ami-0c55b159cbfafe1f0  # Replace with a valid AMI ID for your region
+      InstanceType: t2.micro
+      SecurityGroups:
+        - !Ref WebServerSecurityGroup
+      UserData:
+        Fn::Base64: |
+          #!/bin/bash
+          yum update -y
+          yum install -y httpd
+          systemctl start httpd
+          systemctl enable httpd
+          echo "<h1>Congratulations your server is up and running from IP $(hostname -f)</h1>" > /var/www/html/index.html
+
+  # Create Auto Scaling Group
+  AutoScalingGroup:
+    Type: 'AWS::AutoScaling::AutoScalingGroup'
+    Properties:
+      VPCZoneIdentifier:
+        - !Ref PublicSubnet1-us-east-1
+        - !Ref PublicSubnet2-us-east-2
+        - !Ref PublicSubnet3-us-east-2
+      LaunchConfigurationName: !Ref LaunchConfiguration
+      MinSize: '2'
+      MaxSize: '5'
+      TargetGroupARNs:
+        - !Ref TargetGroup
+
+  # Auto Scaling Group Scaling Policy (Optional)
+  ScalingPolicy:
+    Type: 'AWS::AutoScaling::ScalingPolicy'
+    Properties:
+      AutoScalingGroupName: !Ref AutoScalingGroup
+      PolicyType: TargetTrackingScaling
+      TargetTrackingConfiguration:
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ASGAverageCPUUtilization
+        TargetValue: 50.0
+
+Outputs:
+  LoadBalancerDNSName:
+    Description: "DNS Name of the load balancer"
+    Value: !GetAtt [ApplicationLoadBalancer, DNSName]
